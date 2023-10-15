@@ -1,0 +1,188 @@
+/ DISCLAIMER: This code is given for illustration purposes only. It can contain bugs!
+// You are given the permission to reuse portions of this code in your assignment.
+//
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#define MAX_JOBS 20
+struct Job{
+    pid_t pid;
+    char* args[20];
+};
+struct Job background_jobs[MAX_JOBS];
+int num_jobs =0;
+//
+// This code is given for illustration purposes. You need not include or follow this
+// strictly. Feel free to write better or bug free code. This example code block does not
+// worry about deallocating memory. You need to ensure memory is allocated and deallocated
+// properly so that your shell works without leaking memory.
+//
+int getcmd(char *prompt, char *args[], int *background)
+{
+    int length, i = 0;
+    char *token, *loc;
+    char *line = NULL;
+    size_t linecap = 0;
+    printf("%s", prompt);
+    length = getline(&line, &linecap, stdin);
+    if (length <= 0) {
+    exit(-1);
+    }
+    // Check if background is specified..
+    if ((loc = index(line, '&')) != NULL) {
+    *background = 1;
+    *loc = ' ';
+    } else
+        *background = 0;
+    while ((token = strsep(&line, " \t\n")) != NULL) {
+        for (int j = 0; j < strlen(token); j++)
+            if (token[j] <= 32)
+            token[j] = '\0';
+        if (strlen(token) > 0)
+            args[i++] = token;
+    }
+    return i;
+}
+void reset_args(char* args[]){
+    //  the length of the argu array is 20 and it has index from 0 to 19
+    for(int i=0;i<=19;i++){
+        args[i] = NULL;
+    }
+}
+int main(void)
+{
+    char *args[20];
+    char cwd[1024]; //To store the current working directory
+    int bg;
+    char output_file[100] = "";
+    int pipes[2]; // Pipe for command piping
+    int pipe_fd = 0; //File descriptor for input
+    while(1) {
+        bg = 0;
+        reset_args(args);
+        int cnt = getcmd("\nShl>> ", args, &bg);
+        __pid_t pid;
+        if (args[1]!= NULL &&strcmp(args[1], "|") == 0){
+                    pid = fork();
+                    if(pid == -1)
+                    return -1;
+                    if(pid == 0){
+                        //child process
+                        if(pipe(pipes)== -1){
+                            perror("Pipe creation failed");
+                            exit(EXIT_FAILURE);
+                        }
+                        dup2(pipe_fd,0);
+                        close(pipes[0]);
+
+                        if(args[2]!=NULL){
+                            dup2(pipes[1],1);
+                        }
+                        execvp(args[0],args);
+                        perror("Execution failed");
+                        exit(EXIT_FAILURE);
+                    }else{
+                        close(pipes[1]);
+                        close(pipe_fd);
+
+                        waitpid(pid, NULL, 0);
+
+                        pipe_fd = pipes[0];
+                    }
+                } 
+                 else if (strcmp(args[0], "cd") == 0) {
+                    if (chdir(args[1]) != 0) {
+                        perror("cd failed");
+                    }
+                     else {
+                        if (getcwd(cwd, sizeof(cwd)) != NULL) {
+                            printf("Current working directory: %s\n", cwd);
+                        }
+                    }
+            }else if (strcmp(args[0], "jobs") == 0){
+                    for(int i = 0; i <= num_jobs; i++){
+                        printf("[%d] %d", i+1, background_jobs[i].pid);
+                        for (int j = 0; j<= 19; j++){
+                            printf(" ");
+                            if(background_jobs[i].args[j]!=NULL)
+                            printf("%s", background_jobs[i].args[j] );
+                        }
+
+                    }
+
+            }else if (strcmp(args[0], "fgs") == 0){
+                if (num_jobs > 0){
+                    int job_index = 0;
+                    if(args[1] !=NULL){
+                        job_index = atoi(args[1]) - 1;
+                        if(job_index >= 0 && job_index < num_jobs){
+                        pid_t exe_pid = background_jobs[job_index].pid;
+                        waitpid(exe_pid, NULL,0);
+
+                        for(int i = job_index; i < num_jobs - 1 ; i++){
+                            background_jobs[i] = background_jobs[i + 1];
+                            }
+                        num_jobs--;
+                        }else{
+                        printf("Invalid job number.\n");
+                        }
+                }
+
+            }else{
+                    printf("no jobs to run\n");
+                }
+                }else if(args[1]!= NULL && strcmp(args[1], ">") == 0){
+                    if(args[2] != NULL){
+                        strncpy(output_file, args[2],sizeof(output_file));
+                    }else{
+                        printf("Invalid syntax for output redirection.\n");
+                    }
+                }else if(strcmp(args[0], "exit") == 0){
+                printf("exiting the shell\n");
+                break;
+                } else{
+                if (output_file[0] != '\0') {
+                // Redirect standard output to a file
+                int output_fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC);
+                if (output_fd < 0) {
+                    perror("open");
+                    exit(EXIT_FAILURE);
+                }
+                dup2(output_fd, STDOUT_FILENO);
+                close(output_fd);
+            }
+                pid = fork();
+                if(pid == -1)
+                    return -1;
+                if(pid == 0){
+                    int val = execvp(args[0], args);
+                    if (val == -1)
+                    perror ("Error");
+                }
+                else{ 
+                    if (bg){
+                        background_jobs[num_jobs].pid = pid;
+                        for(int i = 0; i <= 19; i++){
+                            background_jobs[num_jobs].args[i]=args[i];
+                        }
+                        num_jobs++;
+                        }
+                    else{
+                        if(!bg){
+                        waitpid(pid,NULL,0);
+                        }
+                        if(output_file[0] != '\0'){
+                            fclose(stdout);
+                            freopen("/dev/tty", "w", stdout);
+                            output_file[0] = '\0';
+                        }
+                        printf("Done with execvp\n");
+                    }
+                }
+        }
+    }
+}
